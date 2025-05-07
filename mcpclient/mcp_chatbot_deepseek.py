@@ -35,12 +35,23 @@ class MCPClient:
         Args:
             server_script_path: Path to the server script (.py or .js)
         """
-        is_python = server_script_path.endswith('.py')
-        is_js = server_script_path.endswith('.js')
-        if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
+        if not os.path.exists(server_script_path):
+            raise FileNotFoundError(f"Server file {server_script_path} does not exist")
 
-        command = "python" if is_python else "node"
+        # 确定执行命令和参数
+        if server_script_path.endswith('.py'):
+            command = "python"
+            args = [server_script_path]
+        elif server_script_path.endswith('.js'):
+            command = "node"
+            args = [server_script_path]
+        else:
+            # 二进制文件情况
+            if not os.access(server_script_path, os.X_OK):
+                raise PermissionError(f"File {server_script_path} is not executable")
+            command = server_script_path
+            args = []
+
         server_params = StdioServerParameters(
             command=command,
             args=[server_script_path],
@@ -66,69 +77,58 @@ class MCPClient:
                 "content": query
             }
         ]
+        while True:
+            tool_response = await self.session.list_tools()
+            print(f"\n Debug: {tool_response.tools}")
 
-        response = await self.session.list_tools()
-        print(f"\n Debug: {response.tools}")
+            available_tools = [{
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    # "input_schema": tool.inputSchema
+                    "input_schema": tool.inputSchema
+                }
+            } for tool in tool_response.tools]
 
-        available_tools = [{
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.inputSchema
-            }
-        } for tool in response.tools]
-
-        print(f"\n Debug: {available_tools}")
-        # Initial Deepseek api call
-        # 调用 OpenAI API
-        print(f"\nDebug: {messages}")
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=available_tools
-        )
-
-        print(f"\n Debug {response}")
-
-        content = response.choices[0]
-
-        # Process response and handle tool calls
-        # final_text = []
-
-        # Process response and handle tool calls
-        if "tool_calls" == content.finish_reason:
-            # for tool_call in content.message.tool_calls:
-            tool_call = content.message.tool_calls[0]
-            tool_name = tool_call.function.name
-            tool_args = json.loads(tool_call.function.arguments)
-
-            # Execute tool call
-            result = await self.session.call_tool(tool_name, tool_args)
-            print(f"\n\n[Calling tool {tool_name} with args {tool_args}]\n\n")
-
-            # final_text.append(f"[Called tool {tool_name} with args {tool_args}]")
-
-            # Add tool response to conversation history
-            messages.append(content.message.model_dump())
-            messages.append({
-                "role": "tool",
-                "name": tool_name,
-                "content": result.content[0].text,
-                "tool_call_id": tool_call.id
-            })
-            
-            print(f"\n Debug: {messages}")
-            
-            # Get next response from DeepSeek
+            # 调用 OpenAI(Deepseek) API
+            print(f"\nDebug: {messages}")
             response = self.client.chat.completions.create(
-                model = self.model,
-                messages = messages, 
+                model=self.model,
+                messages=messages,
+                tools=available_tools,
+                tool_choice="auto"
             )
-            return response.choices[0].message.content
 
-        return content.message.content
-            
+            print(f"\n Debug {response}")
+
+            content = response.choices[0]
+
+            # Process response and handle tool calls
+            if "tool_calls" == content.finish_reason:
+                for tool_call in content.message.tool_calls:
+                    tool_call = content.message.tool_calls[0]
+                    tool_name = tool_call.function.name
+                    tool_args = json.loads(tool_call.function.arguments)
+
+                    # Execute tool call
+                    result = await self.session.call_tool(tool_name, tool_args)
+                    print(f"\n\n[Calling tool {tool_name} with args {tool_args}]\n\n")
+
+                    # final_text.append(f"[Called tool {tool_name} with args {tool_args}]")
+
+                    # Add tool response to conversation history
+                    messages.append(content.message.model_dump())
+                    messages.append({
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": result.content[0].text,
+                        "tool_call_id": tool_call.id
+                    })
+
+                    print(f"\n Debug: {messages}")
+            else:
+                return content.message.content 
 
     # Now we’ll add the chat loop and cleanup functionality:
     async def chat_loop(self):
