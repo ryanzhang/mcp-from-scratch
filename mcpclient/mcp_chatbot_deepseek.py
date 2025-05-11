@@ -8,7 +8,6 @@ import os
 import sys
 import requests
 from openai import OpenAI
-from anthropic import Anthropic
 from dotenv import load_dotenv
 import json
 
@@ -73,13 +72,20 @@ class MCPClient:
         """Process a query using LLM and available tools"""
         messages = [
             {
+                "role": "system",
+                "content": "You are an autonomous Kubernetes assistant. When asked to perform actions, "
+                        "automatically execute the necessary tools without asking for confirmation. "
+                        "Only ask for clarification if the request is ambiguous or missing required parameters."
+            },
+            {
                 "role": "user",
                 "content": query
             }
         ]
-        while True:
+        max_iterations = 10  # Prevent infinite loops
+        for _ in range(max_iterations):
             tool_response = await self.session.list_tools()
-            print(f"\n Debug: {tool_response.tools}")
+            # print(f"\n Debug: {tool_response.tools}")
 
             available_tools = [{
                 "type": "function",
@@ -87,12 +93,12 @@ class MCPClient:
                     "name": tool.name,
                     "description": tool.description,
                     # "input_schema": tool.inputSchema
-                    "input_schema": tool.inputSchema
+                    "parameters": tool.inputSchema
                 }
             } for tool in tool_response.tools]
 
             # 调用 OpenAI(Deepseek) API
-            print(f"\nDebug: {messages}")
+            print(f"\nDebug[request message:]: {messages}")
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -100,35 +106,52 @@ class MCPClient:
                 tool_choice="auto"
             )
 
-            print(f"\n Debug {response}")
+            print(f"\n Debug(deepseek response object): {response}")
 
-            content = response.choices[0]
+            choice = response.choices[0]
+            message = choice.message
 
-            # Process response and handle tool calls
-            if "tool_calls" == content.finish_reason:
-                for tool_call in content.message.tool_calls:
-                    tool_call = content.message.tool_calls[0]
+            # Handle tool calls
+            if choice.finish_reason == "tool_calls" and message.tool_calls:
+                for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
+                    try:
+                        tool_args = json.loads(tool_call.function.arguments)
+                    except json.JSONDecodeError as e:
+                        print(f"Error parsing tool arguments: {e}")
+                        tool_args = {}
 
-                    # Execute tool call
-                    result = await self.session.call_tool(tool_name, tool_args)
-                    print(f"\n\n[Calling tool {tool_name} with args {tool_args}]\n\n")
-
-                    # final_text.append(f"[Called tool {tool_name} with args {tool_args}]")
-
-                    # Add tool response to conversation history
-                    messages.append(content.message.model_dump())
-                    messages.append({
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": result.content[0].text,
-                        "tool_call_id": tool_call.id
-                    })
-
-                    print(f"\n Debug: {messages}")
+                    print(f"\n[Executing {tool_name} with args {tool_args}]")
+                    try: 
+                        result = await self.session.call_tool(tool_name, tool_args)
+                        
+                        # Add both the assistant message and tool response to history
+                        messages.append({
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": tool_call.id,
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": tool_call.function.arguments
+                                    },
+                                    "type": "function"
+                                }
+                            ]
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "name": tool_name,
+                            "content": str(result),
+                            "tool_call_id": tool_call.id
+                        })                        
+                    except Exception as e:
+                        return f"Error executing {tool_name}: {str(e)}"
+            # If final response
             else:
-                return content.message.content 
+                return message.content
+        return "Maximum iterations reached without completing the request"
 
     # Now we’ll add the chat loop and cleanup functionality:
     async def chat_loop(self):
@@ -156,7 +179,7 @@ class MCPClient:
 # Main Entry Point
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: python client.py <path_to_server_script>")
+        print("Usage: python mcp_chatbot_deepseek.py <path_to_mcp_server> [support .py/.js/binary form]")
         sys.exit(1)
 
     client = MCPClient()
