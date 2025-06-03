@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 import json
 
 
-load_dotenv()  # load environment variables from .env
+#load env from .env file
+load_dotenv()
 
 class MCPClient:
     # Initialize session and client objects
@@ -22,12 +23,12 @@ class MCPClient:
         self.deepseek_api_key = os.getenv("DEEPSEEK_API_KEY")
         if not self.deepseek_api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in .env file")
-        self.base_url = "https://api.deepseek.com/v1"  # DeepSeek API endpoint
+        self.base_url = "https://api.deepseek.com/v1"  
         
         self.model = os.getenv("MODEL")
         self.client = OpenAI(api_key=self.deepseek_api_key, base_url = self.base_url)
 
-    # we’ll implement the method to connect to an MCP server:
+    # Connect to an MCP server:
     async def connect_to_server(self, server_script_path: str):
         """Connect to an MCP server
 
@@ -153,7 +154,6 @@ class MCPClient:
                 return message.content
         return "Maximum iterations reached without completing the request"
 
-    # Now we’ll add the chat loop and cleanup functionality:
     async def chat_loop(self):
         """Run an interactive chat loop"""
         print("\nMCP Client Started!")
@@ -176,7 +176,6 @@ class MCPClient:
         """Clean up resources"""
         await self.exit_stack.aclose()
 
-# Main Entry Point
 async def main():
     if len(sys.argv) < 2:
         print("Usage: python mcp_chatbot_deepseek.py <path_to_mcp_server> [support .py/.js/binary form]")
