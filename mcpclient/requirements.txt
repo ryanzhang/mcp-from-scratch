@@ -1,0 +1,4 @@
+mcp
+openai
+ollama
+python-dotenv
